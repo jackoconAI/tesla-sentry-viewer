@@ -62,6 +62,7 @@ export function ClipCard({ clip, conflict }: Props) {
     <div className="flex items-center gap-3 rounded-lg border bg-card p-2 sm:p-3">
       <div className="relative h-16 w-24 sm:h-14 sm:w-24 shrink-0 overflow-hidden rounded bg-muted">
         {thumb ? (
+          // eslint-disable-next-line @next/next/no-img-element
           <img src={thumb} alt="" className="h-full w-full object-cover" />
         ) : (
           <div className="h-full w-full animate-pulse bg-muted" />

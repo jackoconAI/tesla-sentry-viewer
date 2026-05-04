@@ -30,7 +30,7 @@ interface ViewerState {
 
 import { detectCameraAngle, suggestUnusedAngle } from "./camera-detect";
 
-export const useViewerStore = create<ViewerState>((set, get) => ({
+export const useViewerStore = create<ViewerState>((set) => ({
   clips: [],
   layout: "grid_4",
   focusAngle: null,
