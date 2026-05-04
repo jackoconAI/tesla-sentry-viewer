@@ -21,6 +21,19 @@ const HEIGHT = 3.5;
 const ARC_DEG = 60;
 const ARC_RAD = (ARC_DEG * Math.PI) / 180;
 
+// Tesla cameras are wide-FOV (~120°). Mapping the full image to a 60° arc
+// causes adjacent cameras' outer regions to show overlapping content (the
+// same passing car appearing in both pillar and repeater). Crop each
+// texture to its central portion so we only render the unique core view.
+const CROP_FACTOR: Record<CameraAngle, number> = {
+  front: 0.85,
+  back: 0.85,
+  left_repeater: 0.55,
+  right_repeater: 0.55,
+  left_pillar: 0.55,
+  right_pillar: 0.55,
+};
+
 export function PanoLayout({ clips, setVideoRef }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoElsRef = useRef<Map<CameraAngle, HTMLVideoElement>>(new Map());
@@ -101,6 +114,18 @@ export function PanoLayout({ clips, setVideoRef }: Props) {
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.minFilter = THREE.LinearFilter;
         tex.magFilter = THREE.LinearFilter;
+        tex.wrapS = THREE.ClampToEdgeWrapping;
+        tex.wrapT = THREE.ClampToEdgeWrapping;
+
+        // Mirror + crop in one step. BackSide rendering of the cylinder
+        // shows the inside surface, which mirror-images textures (you're
+        // viewing them from "behind"). Negating repeat.x cancels that.
+        // Combined with the crop offset, this samples the central
+        // CROP_FACTOR fraction of the source image, mirrored horizontally.
+        const crop = CROP_FACTOR[angle];
+        const inset = (1 - crop) * 0.5;
+        tex.repeat.x = -crop;
+        tex.offset.x = 1 - inset;
 
         const mat = new THREE.MeshBasicMaterial({
           map: tex,
