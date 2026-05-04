@@ -91,12 +91,13 @@ export function PanoLayout({ clips, setVideoRef }: Props) {
         if (!v) continue;
 
         const yawRad = (CAMERA_YAW_DEG[angle] * Math.PI) / 180;
-        // Cylinder θ=0 is along +X, increases CCW toward +Z.
-        // Camera "looks at -Z" by default (forward = -Z).
-        // We want the FRONT cam (yaw 0) centered at −Z direction = θ = −π/2.
-        // For each camera at yaw_deg clockwise from front: center θ = −π/2 + yawRad
-        // (Three.js Y rotation: positive yaw rotates clockwise looking down.)
-        const center = -Math.PI / 2 + yawRad;
+        // three.js CylinderGeometry positions vertices as
+        //   x = R·sin(θ),  z = R·cos(θ)
+        // so θ=0 is at +Z, θ=π/2 is at +X, θ=π is at −Z (in front of viewer),
+        // θ=3π/2 is at −X. Increasing θ rotates CCW from above looking down,
+        // which is CW from the seated viewer's POV.
+        // Front cam (yaw 0) → θ=π. Yaw increasing CW from viewer = θ decreasing.
+        const center = Math.PI - yawRad;
         const thetaStart = center - ARC_RAD / 2;
 
         const geo = new THREE.CylinderGeometry(
@@ -150,11 +151,11 @@ export function PanoLayout({ clips, setVideoRef }: Props) {
       for (let i = 0; i < 6; i++) {
         const seamYaw = (i * 60 - 30) * (Math.PI / 180);
         const seam = new THREE.Mesh(seamGeo, seamMat);
-        const center = -Math.PI / 2 + seamYaw;
+        const center = Math.PI - seamYaw;
         seam.position.set(
-          RADIUS * Math.cos(center) * 0.999,
-          0,
           RADIUS * Math.sin(center) * 0.999,
+          0,
+          RADIUS * Math.cos(center) * 0.999,
         );
         seam.lookAt(0, 0, 0);
         scene.add(seam);
