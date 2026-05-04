@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useViewerStore, clipByAngle, maxDuration, type Clip } from "@/lib/store";
-import { CAMERA_ANGLES, CAMERA_LABELS, type CameraAngle } from "@/lib/cameras";
-import { cn } from "@/lib/utils";
+import {
+  CAMERA_ANGLES,
+  SPATIAL_GRID,
+  type CameraAngle,
+} from "@/lib/cameras";
 import { PlaybackControls } from "./playback-controls";
 import { TelemetryOverlay } from "./telemetry-overlay";
 import {
@@ -12,7 +15,9 @@ import {
   type TelemetryTrack,
   type TelemetrySample,
 } from "@/lib/sei";
-import { Maximize2 } from "lucide-react";
+import { VideoSlot, type SetVideoRef } from "./video-slot";
+import { CockpitLayout } from "./cockpit-layout";
+import { PanoLayout } from "./pano-layout";
 
 const SYNC_THRESHOLD = 0.15;
 
@@ -28,7 +33,6 @@ export function MultiCamViewer() {
     [clips],
   );
 
-  // Master clip = front, else longest, else first.
   const master = useMemo(() => {
     const front = clipByAngle(labeledClips, "front");
     if (front) return front;
@@ -41,8 +45,8 @@ export function MultiCamViewer() {
   const totalDuration = useMemo(() => maxDuration(labeledClips), [labeledClips]);
 
   const videoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
-  const setVideoRef = useCallback(
-    (id: string) => (el: HTMLVideoElement | null) => {
+  const setVideoRef: SetVideoRef = useCallback(
+    (id) => (el) => {
       if (el) videoRefs.current.set(id, el);
       else videoRefs.current.delete(id);
     },
@@ -102,26 +106,28 @@ export function MultiCamViewer() {
       masterEl.removeEventListener("timeupdate", onTime);
       masterEl.removeEventListener("ended", onEnded);
     };
-  }, [master]);
+  }, [master, layout]);
 
-  // Apply mute changes to non-master videos.
   useEffect(() => {
     videoRefs.current.forEach((v, id) => {
       v.muted = id === master?.id ? muted : true;
     });
   }, [muted, master?.id]);
 
-  // Resolve which angles to render based on layout.
-  const slots = useMemo<CameraAngle[]>(() => {
+  // Which angles render visibly in the current layout?
+  const visibleAngles = useMemo<CameraAngle[]>(() => {
     switch (layout) {
-      case "grid_6":
-        return ["front", "back", "left_repeater", "right_repeater", "left_pillar", "right_pillar"];
-      case "grid_4":
-        return ["front", "back", "left_repeater", "right_repeater"];
-      case "focus":
-        return CAMERA_ANGLES.filter((a) => a !== (focusAngle ?? "front"));
       case "single":
         return [];
+      case "focus":
+        return CAMERA_ANGLES.filter((a) => a !== (focusAngle ?? "front"));
+      case "grid_4":
+        return ["front", "back", "left_repeater", "right_repeater"];
+      case "grid_6":
+      case "spatial":
+      case "cockpit":
+      case "pano360":
+        return [...CAMERA_ANGLES];
     }
   }, [layout, focusAngle]);
 
@@ -129,6 +135,14 @@ export function MultiCamViewer() {
 
   const focused = focusAngle ?? "front";
   const focusedClip = clipByAngle(labeledClips, focused);
+
+  // Master mounted by the layout already?
+  const masterMountedByLayout =
+    layout === "single"
+      ? master.angle === focused
+      : layout === "focus"
+        ? true // focus mode mounts master either as main or as a thumb
+        : visibleAngles.includes(master.angle as CameraAngle);
 
   return (
     <div className="flex flex-col gap-3">
@@ -144,7 +158,7 @@ export function MultiCamViewer() {
           <FocusLayout
             mainAngle={focused}
             mainClip={focusedClip}
-            thumbAngles={slots}
+            thumbAngles={visibleAngles}
             clips={labeledClips}
             setVideoRef={setVideoRef}
             onFocus={(a) => setFocusAngle(a)}
@@ -152,16 +166,39 @@ export function MultiCamViewer() {
         )}
         {(layout === "grid_4" || layout === "grid_6") && (
           <GridLayout
-            angles={slots}
+            angles={visibleAngles}
             clips={labeledClips}
             setVideoRef={setVideoRef}
             onFocus={(a) => {
               useViewerStore.getState().setLayout("focus");
               setFocusAngle(a);
             }}
-            cols={layout === "grid_6" ? 2 : 2}
+            cols={2}
             rows={layout === "grid_6" ? 3 : 2}
           />
+        )}
+        {layout === "spatial" && (
+          <SpatialLayout
+            clips={labeledClips}
+            setVideoRef={setVideoRef}
+            onFocus={(a) => {
+              useViewerStore.getState().setLayout("focus");
+              setFocusAngle(a);
+            }}
+          />
+        )}
+        {layout === "cockpit" && (
+          <CockpitLayout
+            clips={labeledClips}
+            setVideoRef={setVideoRef}
+            onFocus={(a) => {
+              useViewerStore.getState().setLayout("focus");
+              setFocusAngle(a);
+            }}
+          />
+        )}
+        {layout === "pano360" && (
+          <PanoLayout clips={labeledClips} setVideoRef={setVideoRef} />
         )}
 
         {showTelemetry && telemetry && (
@@ -182,81 +219,30 @@ export function MultiCamViewer() {
         onToggleMute={() => setMuted((m) => !m)}
       />
 
-      {/* Hidden master clip mounted off-screen if not in current layout, so it still drives sync. */}
-      {master &&
-        !slots.includes(master.angle as CameraAngle) &&
-        layout !== "single" &&
-        layout !== "focus" && (
+      {/* If the current layout doesn't mount the master visibly, mount it
+          off-screen so its timeupdate keeps driving sync. iOS Safari throttles
+          display:none videos, so we use a 1px / opacity trick instead. */}
+      {!masterMountedByLayout && (
+        <div
+          className="pointer-events-none absolute"
+          style={{ left: 0, top: 0, width: 1, height: 1, opacity: 0.001 }}
+        >
           <video
             ref={setVideoRef(master.id)}
             src={master.url}
             muted={muted}
             playsInline
             preload="auto"
-            className="hidden"
           />
-        )}
+        </div>
+      )}
 
-      {/* Telemetry sampler (parses SEI from master's File). */}
       <TelemetrySampler clip={master} time={currentTime} onSample={setTelemetry} />
     </div>
   );
 }
 
 // ---- Layout subcomponents ---------------------------------------------------
-
-function VideoSlot({
-  clip,
-  angle,
-  setVideoRef,
-  onFocus,
-  className,
-  fit = "cover",
-}: {
-  clip: Clip | undefined;
-  angle: CameraAngle;
-  setVideoRef: (id: string) => (el: HTMLVideoElement | null) => void;
-  onFocus?: (angle: CameraAngle) => void;
-  className?: string;
-  fit?: "cover" | "contain";
-}) {
-  return (
-    <div
-      className={cn(
-        "group relative bg-zinc-900",
-        onFocus && clip && "cursor-pointer",
-        className,
-      )}
-      onClick={() => clip && onFocus?.(angle)}
-    >
-      {clip ? (
-        <video
-          ref={setVideoRef(clip.id)}
-          src={clip.url}
-          playsInline
-          preload="auto"
-          muted
-          className={cn(
-            "h-full w-full",
-            fit === "cover" ? "object-cover" : "object-contain",
-          )}
-        />
-      ) : (
-        <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
-          No clip
-        </div>
-      )}
-      <div className="pointer-events-none absolute left-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] sm:text-xs font-medium tracking-wide text-white">
-        {CAMERA_LABELS[angle]}
-      </div>
-      {onFocus && clip && (
-        <div className="pointer-events-none absolute right-1.5 top-1.5 rounded bg-black/60 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100">
-          <Maximize2 className="h-3 w-3" />
-        </div>
-      )}
-    </div>
-  );
-}
 
 function SingleLayout({
   clip,
@@ -265,7 +251,7 @@ function SingleLayout({
 }: {
   clip: Clip | undefined;
   angle: CameraAngle;
-  setVideoRef: (id: string) => (el: HTMLVideoElement | null) => void;
+  setVideoRef: SetVideoRef;
 }) {
   return (
     <div className="aspect-video w-full">
@@ -292,7 +278,7 @@ function FocusLayout({
   mainClip: Clip | undefined;
   thumbAngles: CameraAngle[];
   clips: Clip[];
-  setVideoRef: (id: string) => (el: HTMLVideoElement | null) => void;
+  setVideoRef: SetVideoRef;
   onFocus: (angle: CameraAngle) => void;
 }) {
   return (
@@ -308,7 +294,9 @@ function FocusLayout({
       </div>
       <div
         className="grid gap-px bg-black"
-        style={{ gridTemplateColumns: `repeat(${thumbAngles.length}, minmax(0, 1fr))` }}
+        style={{
+          gridTemplateColumns: `repeat(${thumbAngles.length}, minmax(0, 1fr))`,
+        }}
       >
         {thumbAngles.map((a) => (
           <div key={a} className="aspect-video">
@@ -337,7 +325,7 @@ function GridLayout({
 }: {
   angles: CameraAngle[];
   clips: Clip[];
-  setVideoRef: (id: string) => (el: HTMLVideoElement | null) => void;
+  setVideoRef: SetVideoRef;
   onFocus: (angle: CameraAngle) => void;
   cols: number;
   rows: number;
@@ -359,6 +347,40 @@ function GridLayout({
           setVideoRef={setVideoRef}
           onFocus={onFocus}
           fit="cover"
+          className="h-full w-full"
+        />
+      ))}
+    </div>
+  );
+}
+
+function SpatialLayout({
+  clips,
+  setVideoRef,
+  onFocus,
+}: {
+  clips: Clip[];
+  setVideoRef: SetVideoRef;
+  onFocus: (angle: CameraAngle) => void;
+}) {
+  return (
+    <div
+      className="grid bg-black"
+      style={{
+        gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+        gridTemplateRows: "repeat(2, minmax(0, 1fr))",
+        aspectRatio: "3 / 2",
+      }}
+    >
+      {SPATIAL_GRID.flat().map((a) => (
+        <VideoSlot
+          key={a}
+          clip={clipByAngle(clips, a)}
+          angle={a}
+          setVideoRef={setVideoRef}
+          onFocus={onFocus}
+          fit="cover"
+          feather
           className="h-full w-full"
         />
       ))}
